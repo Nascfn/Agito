@@ -111,7 +111,9 @@ Plain CSS only, no animation library.
 
 - New tasks appear at the top of the list.
 - Quick add saves instantly; failures roll back with a toast.
-- Deleting waits 5 seconds (the undo window) before deleting for real.
+- Deleting waits 5 seconds (the undo window) before deleting for real. Leaving
+  or hiding the tab ends the window and deletes right away.
+- Messages stack (up to 3), so a new one never hides another's Undo.
 - Tapping a task opens an edit sheet (native `<dialog>`) with the same fields
   plus Delete.
 - Lists: switcher in the header; new lists are created from the same menu. The

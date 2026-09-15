@@ -113,9 +113,15 @@ export async function deleteTask(id: unknown): Promise<ActionResult<null>> {
 
   const storage = supabase.storage.from(ATTACHMENTS_BUCKET);
   const paths = new Set((attachments ?? []).map((row) => row.storage_path as string));
-  // Also catch files whose upload finished but was never recorded.
-  const { data: folder } = await storage.list(`${userId}/${id}`);
-  for (const file of folder ?? []) paths.add(`${userId}/${id}/${file.name}`);
+  // Also catch files whose upload finished but was never recorded. `list`
+  // returns one page at a time, so keep going until a short page.
+  const folder = `${userId}/${id}`;
+  const pageSize = 100;
+  for (let offset = 0; ; offset += pageSize) {
+    const { data: page } = await storage.list(folder, { limit: pageSize, offset });
+    for (const file of page ?? []) paths.add(`${folder}/${file.name}`);
+    if (!page || page.length < pageSize) break;
+  }
 
   if (paths.size > 0) {
     const { error: storageError } = await storage.remove([...paths]);

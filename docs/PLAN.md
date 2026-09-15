@@ -77,8 +77,10 @@ means all day. `time_zone` (IANA name, e.g. `America/New_York`) is picked during
 onboarding so Agito and Claude agree on times (decided 2026-09-15). It's a
 **dropdown, not a text field**: options come from the browser's built-in list
 (`Intl.supportedValuesOf("timeZone")`, no package), pre-selected to the
-detected zone. The server action checks the value against the same list, and
-the database trigger still rejects unknown names as a last line of defense.
+detected zone. The server action accepts any zone name the
+runtime's `Intl` recognizes (browsers and Node name some zones differently,
+e.g. `Asia/Kolkata` vs `Asia/Calcutta`) and saves the runtime's name; the
+database trigger still rejects unknown names as a last line of defense.
 
 ### `task_attachments`
 `id, task_id, user_id, storage_path, file_name, mime_type, size_bytes, created_at`
@@ -153,49 +155,85 @@ claude.ai and the Claude phone app. Details, requirements, and open questions:
 2. Lists and tasks: create, view, edit, complete, delete — *done; all tested
    against the real database (2026-09-14), including undo on complete and
    delete, and the "Agent: do this" constraint*
-3. File attachments on tasks — *code written 2026-09-15; migration
-   `20260915134248_phase3_attachments.sql` applied and verified;
-   **browser testing still pending** (see "Pending testing" below)*
+3. File attachments on tasks — *done; browser-tested 2026-09-15*
 4. Task feed, MCP server with OAuth, deploy to own VM, connect in claude.ai —
-   *onboarding screen (`/onboarding`) code written 2026-09-15, not tested*
+   *onboarding screen (`/onboarding`) done and browser-tested 2026-09-15*
 5. Polish: completion animation, keyboard shortcuts, sound
 
-## Pending testing
+## Testing
 
-Paused 2026-09-15 (needs the user signed in; Claude doesn't sign in to accounts).
-Don't mark phase 3 done until every item passes.
+**Browser testing passed 2026-09-15** (signed in, Chrome, against the real
+database), plus a read-only database check afterwards confirming no orphaned
+files and 1:1 attachment/storage parity.
 
-**Phase 3 — file attachments (browser, signed in)**
-- [ ] Quick add: add files in Details, save; row shows "Uploading…", then a
-      paperclip with the file count
-- [ ] Edit sheet: upload files; they appear in the list with name and size
-- [ ] Open a PDF or image (opens in a new tab) and a DOCX/XLSX (downloads)
-- [ ] Remove a file (Remove / Keep confirmation); the stored file is deleted
-- [ ] Delete a task that has files; Undo within 5 seconds restores it with its
-      files; after the undo window the task and its stored files are gone
-- [ ] A blocked type (e.g. `.html`, `.svg`, `.zip`) is refused with a message
-- [ ] A file over 50 MB is refused with a message
-- [ ] Watch the dev server log for errors throughout
+**Phase 3 — file attachments**
+- [x] Quick add with files; row shows the paperclip and file count
+- [x] Edit sheet uploads; files listed with name and size
+- [x] Links are private and time-limited; PDFs/images open in a tab, DOCX
+      downloads; fetching a link returned the file (200, right type and bytes)
+- [x] Remove a file (Remove / Keep); row and stored file both gone
+- [x] Delete a task with files; Undo restores it; after the window the task,
+      its rows, and its stored files are gone (verified in the database)
+- [x] `.html` refused: "blocked.html isn't a supported file type."
+- [x] 52 MB file refused: "huge.pdf is over 50 MB."
+- [x] Dev server log clean; no browser console errors
 
-**Database update `20260915173612_no_agent_tasks_and_time_zone.sql`**
-- [ ] A normal signed-in user can still create, edit, complete, and delete tasks
-- [ ] An invalid time zone is rejected (check when onboarding exists)
+**Tasks, lists, and the agent/time zone migration**
+- [x] Create (quick add and details), edit, complete, reopen, delete, undo
+- [x] Create a second list and switch between lists
+- [x] Estimate round-trips as 90 minutes → "1.5 hr" in the sheet
 
-**Onboarding (`/onboarding`, written 2026-09-15)**
-- [ ] A user whose `user_settings.onboarded_at` is empty is sent to
-      `/onboarding` from the home page
-- [ ] The time zone dropdown lists real zones with offsets and pre-selects the
-      browser's zone
-- [ ] Overnight (end before start) and all-day (equal) windows show their hint
-- [ ] Picking 15 or 30 minutes shows the advanced warning
-- [ ] "Save and continue" saves all fields plus `onboarded_at`, then opens the
-      task list; the home page no longer redirects
-- [ ] Revisiting `/onboarding` shows the saved values
+**Onboarding**
+- [x] New user redirected to `/onboarding`; after saving, the home page loads
+- [x] Time zone dropdown lists real zones with offsets, pre-selects the
+      browser's zone, and saves (`America/New_York`)
+- [x] Overnight and all-day hints; advanced frequency warning
+- [x] Revisiting `/onboarding` shows the saved values
 
-Optional without signing in: database-level checks that impersonate a user or
-an agent inside a rolled-back transaction (own-folder uploads allowed, other
-folders refused, blocked types and sizes rejected, agents can't create/edit
-tasks or upload).
+**Left to test:** an invalid time zone can only come from outside the app
+(the dropdown prevents it); the database rejects unknown names.
+
+**Done without signing in (2026-09-15):** rolled-back database security tests
+impersonating two users, an agent, and anon — 136 checks passed, nothing
+persisted. Automated logic tests: `npm test` (dates, validation, file rules,
+settings).
+
+## Follow-ups from review and security tests (2026-09-15)
+
+Not yet fixed; pick before other users join.
+
+Database hardening — **applied 2026-09-15** as
+`20260915183858_security_hardening.sql`; re-tested with rolled-back database
+tests (111 checks passed, nothing persisted):
+- [x] `TRUNCATE` revoked from `anon`/`authenticated` on public tables.
+- [x] `.` and `..` segments rejected in `task_attachments.storage_path`.
+- [x] INSERT limited to the columns the app sends (tasks, lists, attachments).
+- [x] UPDATE revoked on `task_feed` and `task_attachments`.
+- [x] Time zones must exist in `pg_timezone_names` (`EST5EDT` is listed there,
+      so it's still accepted; it's a real tz database name).
+- Accepted, can't fix: `storage.objects` still allows `TRUNCATE` for
+  `anon`/`authenticated` — Supabase's storage role owns those grants.
+- [ ] Optional: revoke table-level INSERT on `user_settings` (RLS already
+      blocks it; no insert policy).
+- [ ] Check where `public.rls_auto_enable()` came from (not in our
+      migrations; callable by anon/authenticated per the advisors) and revoke
+      EXECUTE if it isn't needed.
+
+App — code written 2026-09-15 (type-check, lint, tests, build pass; needs
+browser testing):
+- [x] Edits, sheet uploads, and deletes queue behind task creation in
+      `task-board.tsx`.
+- [x] Pending deletes commit when the tab is hidden or closed (the undo window
+      ends when you leave the tab).
+- [x] Toasts stack (up to 3), so a new message doesn't remove an Undo.
+- [x] Signed file links refresh every 8 minutes while the sheet is open.
+- [x] Task delete cleanup pages through `storage.list`.
+- [x] HSTS header in production; `NEXT_PUBLIC_SITE_URL` required in production.
+- [ ] Decide whether "today" uses the browser zone or the saved time zone.
+- [ ] Make toast buttons (Undo, dismiss) bigger — they're a small target on a
+      phone; noticed while testing 2026-09-15.
+- [ ] Undo after a delete restores the task's files as of the delete (files
+      uploaded during the undo window show after reload).
 
 ## Later
 

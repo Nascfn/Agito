@@ -22,8 +22,13 @@ export async function sendMagicLink(
 
   // Prefer the configured site URL. Supabase also only redirects to URLs on the
   // project's allowlist, so a spoofed Origin header can't redirect elsewhere.
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || (await headers()).get("origin");
+  // In production the site URL must be configured, never taken from the request.
+  const configuredUrl = process.env.NEXT_PUBLIC_SITE_URL;
+  const siteUrl =
+    configuredUrl ||
+    (process.env.NODE_ENV === "production" ? null : (await headers()).get("origin"));
   if (!siteUrl) {
+    if (!configuredUrl) console.error("NEXT_PUBLIC_SITE_URL is not set.");
     return { status: "error", message: "Couldn't send the link. Please try again in a minute." };
   }
 

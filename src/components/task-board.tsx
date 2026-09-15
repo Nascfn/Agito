@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createTask, deleteTask, setTaskStatus, updateTask } from "@/app/actions/tasks";
 import { signOut } from "@/app/auth/actions";
+import { describeUploadFailures } from "@/lib/attachments/rules";
 import { uploadAttachment } from "@/lib/attachments/upload";
 import { formatEstimate, localDateKey } from "@/lib/format";
 import type { Attachment, List, Task, TaskInput, TaskStatus } from "@/lib/types";
@@ -12,12 +13,26 @@ import { ListSwitcher } from "./list-switcher";
 import { QuickAdd } from "./quick-add";
 import { TaskRow } from "./task-row";
 import { TaskSheet } from "./task-sheet";
-import { Toast, type ToastState } from "./toast";
+import { Toasts, type ToastItem } from "./toast";
 
 const COMPLETE_ANIMATION_MS = 450;
 const UNDO_WINDOW_MS = 5000;
+const MAX_TOASTS = 3;
 
 type Timer = ReturnType<typeof setTimeout>;
+type Queues = Map<string, Promise<unknown>>;
+
+/**
+ * Runs `run` after every earlier server write for the same task, even if one
+ * failed. Keeps a task's create, edits, status changes, uploads, and delete in
+ * order on slow connections.
+ */
+function enqueueIn<T>(queues: Queues, id: string, run: () => Promise<T>) {
+  const previous = queues.get(id) ?? Promise.resolve();
+  const next = previous.then(run, run);
+  queues.set(id, next);
+  return next;
+}
 
 type Props = {
   lists: List[];
@@ -42,22 +57,18 @@ export function TaskBoard({ lists, currentList, initialTasks, userId }: Props) {
   const [uploadCounts, setUploadCounts] = useState<Record<string, number>>({});
   const [completingIds, setCompletingIds] = useState<ReadonlySet<string>>(new Set());
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [toast, setToast] = useState<ToastState | null>(null);
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
   const today = useToday();
 
   const completeTimers = useRef(new Map<string, Timer>());
-  const deleteTimers = useRef(new Map<string, Timer>());
-  const toastTimer = useRef<Timer | null>(null);
+  // Deletes waiting out the undo window, with the toast that offers Undo.
+  const pendingDeletes = useRef(new Map<string, { timer: Timer; toastId: number }>());
+  const toastTimers = useRef(new Map<number, Timer>());
   const toastCount = useRef(0);
-  // Server writes per task run in order, so a quick "done" then "undo" (or
-  // completing a task before its create finishes) can't land out of order.
-  const taskQueues = useRef(new Map<string, Promise<unknown>>());
+  const taskQueues = useRef<Queues>(new Map());
 
   function enqueue<T>(id: string, run: () => Promise<T>) {
-    const previous = taskQueues.current.get(id) ?? Promise.resolve();
-    const next = previous.then(run, run);
-    taskQueues.current.set(id, next);
-    return next;
+    return enqueueIn(taskQueues.current, id, run);
   }
 
   function queueStatus(id: string, status: TaskStatus) {
@@ -65,28 +76,55 @@ export function TaskBoard({ lists, currentList, initialTasks, userId }: Props) {
   }
 
   useEffect(() => {
-    const deletes = deleteTimers.current;
+    const deletes = pendingDeletes.current;
+    const queues = taskQueues.current;
     const completes = completeTimers.current;
-    const toastTimeout = toastTimer;
-    return () => {
-      // Leaving the page: commit deletes that were still waiting on undo.
-      for (const [id, timer] of deletes) {
-        clearTimeout(timer);
-        void deleteTask(id);
+    const toastTimeouts = toastTimers.current;
+
+    // Commit deletes still in their undo window when the tab is hidden or
+    // closed, or the board unmounts, so a delete isn't silently dropped.
+    function commitPendingDeletes() {
+      if (deletes.size === 0) return;
+      const undoToasts = new Set<number>();
+      for (const [id, pending] of deletes) {
+        clearTimeout(pending.timer);
+        undoToasts.add(pending.toastId);
+        void enqueueIn(queues, id, () => deleteTask(id));
       }
       deletes.clear();
+      setToasts((current) => current.filter((toast) => !undoToasts.has(toast.id)));
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "hidden") commitPendingDeletes();
+    }
+
+    window.addEventListener("pagehide", commitPendingDeletes);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("pagehide", commitPendingDeletes);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      commitPendingDeletes();
       completes.forEach(clearTimeout);
-      if (toastTimeout.current) clearTimeout(toastTimeout.current);
+      toastTimeouts.forEach(clearTimeout);
     };
   }, []);
 
+  function dismissToast(id: number) {
+    const timer = toastTimers.current.get(id);
+    if (timer) clearTimeout(timer);
+    toastTimers.current.delete(id);
+    setToasts((current) => current.filter((toast) => toast.id !== id));
+  }
+
   function showToast(message: string, undo?: () => void) {
     const id = ++toastCount.current;
-    setToast({ id, message, undo });
-    if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => {
-      setToast((current) => (current?.id === id ? null : current));
-    }, UNDO_WINDOW_MS);
+    setToasts((current) => [...current, { id, message, undo }].slice(-MAX_TOASTS));
+    toastTimers.current.set(
+      id,
+      setTimeout(() => dismissToast(id), UNDO_WINDOW_MS),
+    );
+    return id;
   }
 
   function patchTask(id: string, patch: Partial<Task>) {
@@ -127,8 +165,13 @@ export function TaskBoard({ lists, currentList, initialTasks, userId }: Props) {
     });
   }
 
+  /** Uploads files to a task and returns the error messages for any that failed. */
   async function uploadFiles(taskId: string, files: File[]) {
     countUploads(taskId, files.length);
+    // Storage policies check that the task exists, so wait for its create
+    // (and any other pending writes) to finish first.
+    await enqueue(taskId, async () => undefined);
+
     const results = await Promise.all(
       files.map(async (file) => {
         const result = await uploadAttachment(userId, taskId, file);
@@ -137,10 +180,7 @@ export function TaskBoard({ lists, currentList, initialTasks, userId }: Props) {
         return result;
       }),
     );
-
-    const failures = results.flatMap((result) => (result.ok ? [] : [result.error]));
-    if (failures.length === 1) showToast(failures[0]);
-    else if (failures.length > 1) showToast(`${failures.length} files couldn't be uploaded. Try again.`);
+    return results.flatMap((result) => (result.ok ? [] : [result.error]));
   }
 
   function stopCompleting(id: string) {
@@ -174,8 +214,10 @@ export function TaskBoard({ lists, currentList, initialTasks, userId }: Props) {
       return;
     }
 
-    // Files can only upload once the task exists (storage policies check it).
-    if (files.length > 0) await uploadFiles(id, files);
+    if (files.length > 0) {
+      const message = describeUploadFailures(await uploadFiles(id, files));
+      if (message) showToast(message);
+    }
   }
 
   function handleComplete(task: Task) {
@@ -214,7 +256,7 @@ export function TaskBoard({ lists, currentList, initialTasks, userId }: Props) {
     if (!previous) return;
     patchTask(id, input);
 
-    const result = await updateTask(id, input);
+    const result = await enqueue(id, () => updateTask(id, input));
     if (!result.ok) {
       patchTask(id, inputFields(previous));
       showToast(result.error);
@@ -240,20 +282,23 @@ export function TaskBoard({ lists, currentList, initialTasks, userId }: Props) {
 
     // Wait out the undo window before deleting for real.
     const timer = setTimeout(async () => {
-      deleteTimers.current.delete(id);
-      const result = await deleteTask(id);
+      pendingDeletes.current.delete(id);
+      const result = await enqueue(id, () => deleteTask(id));
       if (!result.ok) {
         restore();
         showToast(result.error);
       }
     }, UNDO_WINDOW_MS);
-    deleteTimers.current.set(id, timer);
 
-    showToast("Task deleted", () => {
-      clearTimeout(timer);
-      deleteTimers.current.delete(id);
+    const toastId = showToast("Task deleted", () => {
+      const pending = pendingDeletes.current.get(id);
+      // Already committed (window ended or the tab was hidden): nothing to undo.
+      if (!pending) return;
+      clearTimeout(pending.timer);
+      pendingDeletes.current.delete(id);
       restore();
     });
+    pendingDeletes.current.set(id, { timer, toastId });
   }
 
   const openTasks = tasks.filter((task) => task.status === "todo");
@@ -348,16 +393,17 @@ export function TaskBoard({ lists, currentList, initialTasks, userId }: Props) {
         <TaskSheet
           key={editingTask.id}
           task={editingTask}
+          uploading={uploadCounts[editingTask.id] ?? 0}
           onClose={() => setEditingId(null)}
           onSave={handleSave}
           onDelete={handleDelete}
-          userId={userId}
+          onUploadFiles={uploadFiles}
           onAttachmentAdded={addAttachment}
           onAttachmentRemoved={removeAttachment}
         />
       )}
 
-      <Toast toast={toast} onDismiss={() => setToast(null)} />
+      <Toasts toasts={toasts} onDismiss={dismissToast} />
     </main>
   );
 }
