@@ -18,6 +18,13 @@ export default async function Home({ searchParams }: PageProps<"/">) {
   const { data: auth } = await supabase.auth.getClaims();
   if (!auth?.claims) redirect("/login");
 
+  // New users pick their preferences before seeing their tasks.
+  const { data: settings } = await supabase
+    .from("user_settings")
+    .select("onboarded_at")
+    .maybeSingle();
+  if (settings && !settings.onboarded_at) redirect("/onboarding");
+
   const { data: listRows, error: listError } = await supabase
     .from("lists")
     .select(LIST_COLUMNS)
@@ -60,6 +67,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
       lists={lists}
       currentList={currentList}
       initialTasks={(taskRows ?? []) as unknown as Task[]}
+      userId={auth.claims.sub}
     />
   );
 }

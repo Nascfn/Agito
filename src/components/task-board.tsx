@@ -3,8 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { createTask, deleteTask, setTaskStatus, updateTask } from "@/app/actions/tasks";
 import { signOut } from "@/app/auth/actions";
+import { uploadAttachment } from "@/lib/attachments/upload";
 import { formatEstimate, localDateKey } from "@/lib/format";
-import type { List, Task, TaskInput, TaskStatus } from "@/lib/types";
+import type { Attachment, List, Task, TaskInput, TaskStatus } from "@/lib/types";
 import { useToday } from "@/lib/use-today";
 import { newId } from "@/lib/uuid";
 import { ListSwitcher } from "./list-switcher";
@@ -22,6 +23,7 @@ type Props = {
   lists: List[];
   currentList: List;
   initialTasks: Task[];
+  userId: string;
 };
 
 function inputFields(task: Task): TaskInput {
@@ -35,8 +37,9 @@ function inputFields(task: Task): TaskInput {
   };
 }
 
-export function TaskBoard({ lists, currentList, initialTasks }: Props) {
+export function TaskBoard({ lists, currentList, initialTasks, userId }: Props) {
   const [tasks, setTasks] = useState(initialTasks);
+  const [uploadCounts, setUploadCounts] = useState<Record<string, number>>({});
   const [completingIds, setCompletingIds] = useState<ReadonlySet<string>>(new Set());
   const [editingId, setEditingId] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
@@ -90,6 +93,56 @@ export function TaskBoard({ lists, currentList, initialTasks }: Props) {
     setTasks((current) => current.map((task) => (task.id === id ? { ...task, ...patch } : task)));
   }
 
+  function addAttachment(taskId: string, attachment: Attachment) {
+    setTasks((current) =>
+      current.map((task) =>
+        task.id === taskId
+          ? {
+              ...task,
+              attachments: [
+                ...task.attachments.filter((existing) => existing.id !== attachment.id),
+                attachment,
+              ],
+            }
+          : task,
+      ),
+    );
+  }
+
+  function removeAttachment(taskId: string, attachmentId: string) {
+    setTasks((current) =>
+      current.map((task) =>
+        task.id === taskId
+          ? { ...task, attachments: task.attachments.filter((a) => a.id !== attachmentId) }
+          : task,
+      ),
+    );
+  }
+
+  function countUploads(taskId: string, delta: number) {
+    setUploadCounts((current) => {
+      const next = { ...current, [taskId]: (current[taskId] ?? 0) + delta };
+      if (next[taskId] <= 0) delete next[taskId];
+      return next;
+    });
+  }
+
+  async function uploadFiles(taskId: string, files: File[]) {
+    countUploads(taskId, files.length);
+    const results = await Promise.all(
+      files.map(async (file) => {
+        const result = await uploadAttachment(userId, taskId, file);
+        countUploads(taskId, -1);
+        if (result.ok) addAttachment(taskId, result.data);
+        return result;
+      }),
+    );
+
+    const failures = results.flatMap((result) => (result.ok ? [] : [result.error]));
+    if (failures.length === 1) showToast(failures[0]);
+    else if (failures.length > 1) showToast(`${failures.length} files couldn't be uploaded. Try again.`);
+  }
+
   function stopCompleting(id: string) {
     const timer = completeTimers.current.get(id);
     if (timer) clearTimeout(timer);
@@ -101,7 +154,7 @@ export function TaskBoard({ lists, currentList, initialTasks }: Props) {
     });
   }
 
-  async function handleAdd(input: TaskInput) {
+  async function handleAdd(input: TaskInput, files: File[]) {
     const id = newId();
     const optimistic: Task = {
       id,
@@ -110,6 +163,7 @@ export function TaskBoard({ lists, currentList, initialTasks }: Props) {
       status: "todo",
       completed_at: null,
       created_at: new Date().toISOString(),
+      attachments: [],
     };
     setTasks((current) => [optimistic, ...current]);
 
@@ -117,7 +171,11 @@ export function TaskBoard({ lists, currentList, initialTasks }: Props) {
     if (!result.ok) {
       setTasks((current) => current.filter((task) => task.id !== id));
       showToast(result.error);
+      return;
     }
+
+    // Files can only upload once the task exists (storage policies check it).
+    if (files.length > 0) await uploadFiles(id, files);
   }
 
   function handleComplete(task: Task) {
@@ -257,6 +315,7 @@ export function TaskBoard({ lists, currentList, initialTasks }: Props) {
               task={task}
               today={today}
               completing={completingIds.has(task.id)}
+              uploading={uploadCounts[task.id] ?? 0}
               onToggle={() =>
                 completingIds.has(task.id) ? void handleReopen(task.id) : handleComplete(task)
               }
@@ -276,6 +335,7 @@ export function TaskBoard({ lists, currentList, initialTasks }: Props) {
                 task={task}
                 today={today}
                 completing={false}
+                uploading={0}
                 onToggle={() => void handleReopen(task.id)}
                 onOpen={() => setEditingId(task.id)}
               />
@@ -291,6 +351,9 @@ export function TaskBoard({ lists, currentList, initialTasks }: Props) {
           onClose={() => setEditingId(null)}
           onSave={handleSave}
           onDelete={handleDelete}
+          userId={userId}
+          onAttachmentAdded={addAttachment}
+          onAttachmentRemoved={removeAttachment}
         />
       )}
 

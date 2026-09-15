@@ -27,7 +27,7 @@ help plan them onto a calendar, and help get them done.
 | `@supabase/supabase-js` + `@supabase/ssr` | Database, auth, storage, sessions |
 | MCP TypeScript SDK | MCP server (phase 4 only) |
 | Supabase | Postgres, Auth (incl. OAuth server for agents), Storage |
-| Vercel | Hosting (needed so Claude can reach the MCP server) |
+| Own VM (planned, decided 2026-09-15) | Hosting (needed so Claude can reach the MCP server): Node running `next start`, HTTPS via a reverse proxy such as Caddy, always on |
 
 Deliberately not used: UI kits, animation libraries, data-fetching libraries,
 natural-language date parsing, PDF text extraction. Replacements: custom
@@ -38,7 +38,14 @@ input, and sending original files to Claude (it reads PDFs and images directly).
 
 - **Title** — required. Enter saves.
 - **Description** — optional, free text for context.
-- **Files** — optional, PDFs/images/etc. (Supabase Storage).
+- **Files** — optional (Supabase Storage). Decided 2026-09-15:
+  - Up to 50 MB per file.
+  - Allowed: PDF; images (PNG, JPG, WebP, GIF, HEIC/HEIF); text (TXT,
+    Markdown, CSV, JSON); Word, Excel, PowerPoint (DOCX, XLSX, PPTX).
+    Everything else is blocked (HTML, SVG, programs, scripts, archives).
+  - Files are stored exactly as uploaded — no conversion.
+  - Deleting a task or an attachment also deletes the stored file. For task
+    deletes this happens after the 5-second undo window.
 - **Due date** — optional, native date picker, optional time.
 - **Time estimate** — optional, number + minutes/hours toggle, stored as minutes.
 - **Agent: do this** — optional toggle. When on, the agent works on the task
@@ -62,11 +69,16 @@ Due date and time are stored separately (`date` + optional `time`) so a date-onl
 task never shifts days across time zones.
 
 ### `user_settings`
-`user_id, schedule_window_start, schedule_window_end, schedule_weekends, check_frequency_minutes, onboarded_at, updated_at` —
+`user_id, schedule_window_start, schedule_window_end, schedule_weekends, check_frequency_minutes, time_zone, onboarded_at, updated_at` —
 one row per user, created at sign-up. The scheduling window (default 9am–9pm)
 is asked during onboarding and limits when agents place tasks on the calendar.
 Any window is allowed: end before start means overnight, start equal to end
-means all day.
+means all day. `time_zone` (IANA name, e.g. `America/New_York`) is picked during
+onboarding so Agito and Claude agree on times (decided 2026-09-15). It's a
+**dropdown, not a text field**: options come from the browser's built-in list
+(`Intl.supportedValuesOf("timeZone")`, no package), pre-selected to the
+detected zone. The server action checks the value against the same list, and
+the database trigger still rejects unknown names as a last line of defense.
 
 ### `task_attachments`
 `id, task_id, user_id, storage_path, file_name, mime_type, size_bytes, created_at`
@@ -97,15 +109,15 @@ Rules:
 ## MCP tools (phase 4)
 
 Full list and the Claude setup prompt: [SETUP-PROMPT.md](SETUP-PROMPT.md).
-Summary: read tools (`list_tasks`, `list_lists`, `get_task`, `get_attachment`,
-`get_updates`), plus `ack_updates`, `add_feed_entry`, and `create_task`.
-Agents are feed-only for now — no tool edits existing tasks.
+Summary: read tools (`list_tasks`, `list_lists`, `get_preferences`, `get_task`,
+`get_attachment`, `get_updates`), plus `ack_updates` and `add_feed_entry`.
+Agents are feed-only for now — no tool creates or edits tasks.
 
 Agents **cannot delete anything** — tasks, lists, attachments, files, or feed
 entries — and **cannot edit tasks, mark them done, or reopen them**; they also
 can't create or rename lists, upload files, or change settings (decided
-2026-09-14). They can read everything, create new regular tasks, and write to
-the task feed. Only the user can mark a task "Agent: do this". There are no tools for the rest, and the database blocks it for OAuth
+2026-09-14). They can read everything, and write to the task feed. They
+**can't create tasks** for now (decided 2026-09-15; maybe later). Only the user can mark a task "Agent: do this". There are no tools for the rest, and the database blocks it for OAuth
 sessions. If an agent believes a task is done, it says so in the task feed;
 only the user closes it. Later: a small indicator on tasks where an agent
 thinks the work is done.
@@ -141,9 +153,49 @@ claude.ai and the Claude phone app. Details, requirements, and open questions:
 2. Lists and tasks: create, view, edit, complete, delete — *done; all tested
    against the real database (2026-09-14), including undo on complete and
    delete, and the "Agent: do this" constraint*
-3. File attachments on tasks
-4. Task feed, MCP server with OAuth, deploy to Vercel, connect in claude.ai
+3. File attachments on tasks — *code written 2026-09-15; migration
+   `20260915134248_phase3_attachments.sql` applied and verified;
+   **browser testing still pending** (see "Pending testing" below)*
+4. Task feed, MCP server with OAuth, deploy to own VM, connect in claude.ai —
+   *onboarding screen (`/onboarding`) code written 2026-09-15, not tested*
 5. Polish: completion animation, keyboard shortcuts, sound
+
+## Pending testing
+
+Paused 2026-09-15 (needs the user signed in; Claude doesn't sign in to accounts).
+Don't mark phase 3 done until every item passes.
+
+**Phase 3 — file attachments (browser, signed in)**
+- [ ] Quick add: add files in Details, save; row shows "Uploading…", then a
+      paperclip with the file count
+- [ ] Edit sheet: upload files; they appear in the list with name and size
+- [ ] Open a PDF or image (opens in a new tab) and a DOCX/XLSX (downloads)
+- [ ] Remove a file (Remove / Keep confirmation); the stored file is deleted
+- [ ] Delete a task that has files; Undo within 5 seconds restores it with its
+      files; after the undo window the task and its stored files are gone
+- [ ] A blocked type (e.g. `.html`, `.svg`, `.zip`) is refused with a message
+- [ ] A file over 50 MB is refused with a message
+- [ ] Watch the dev server log for errors throughout
+
+**Database update `20260915173612_no_agent_tasks_and_time_zone.sql`**
+- [ ] A normal signed-in user can still create, edit, complete, and delete tasks
+- [ ] An invalid time zone is rejected (check when onboarding exists)
+
+**Onboarding (`/onboarding`, written 2026-09-15)**
+- [ ] A user whose `user_settings.onboarded_at` is empty is sent to
+      `/onboarding` from the home page
+- [ ] The time zone dropdown lists real zones with offsets and pre-selects the
+      browser's zone
+- [ ] Overnight (end before start) and all-day (equal) windows show their hint
+- [ ] Picking 15 or 30 minutes shows the advanced warning
+- [ ] "Save and continue" saves all fields plus `onboarded_at`, then opens the
+      task list; the home page no longer redirects
+- [ ] Revisiting `/onboarding` shows the saved values
+
+Optional without signing in: database-level checks that impersonate a user or
+an agent inside a rolled-back transaction (own-folder uploads allowed, other
+folders refused, blocked types and sizes rejected, agents can't create/edit
+tasks or upload).
 
 ## Later
 

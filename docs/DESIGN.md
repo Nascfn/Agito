@@ -65,6 +65,17 @@ System font stack for now (fast, no downloads). Headings use weight 500.
   `accent-strong`), due tag, estimate.
 - **Task feed indicator:** sparkle icon in `accent-soft`, e.g. "Claude added to
   the feed".
+- **Onboarding (`/onboarding`):** shown once, before the task list, when a user
+  hasn't set preferences. Sections: time zone (dropdown of real zones with
+  offsets, pre-selected from the browser), scheduling window (From / To time
+  pickers, with "Runs overnight" or "Any time of day" hints), "Schedule on
+  weekends" switch, and check-in frequency (dropdown; 15 and 30 minutes marked
+  advanced with a usage warning). One primary button: "Save and continue".
+- **Files:** in quick add details, picked files are listed (name, size, remove)
+  and upload right after the task is saved; the row shows "Uploading…". In the
+  edit sheet, files upload immediately and are listed with open (previewable
+  types open in a new tab, others download), size, and remove with an inline
+  Remove / Keep confirmation. Task rows show a paperclip and file count.
 - **Agent thinks it's done (later):** a small indicator on a task when an agent
   has said in the task feed that it believes the work is done. Only the user
   can close the task.
