@@ -75,6 +75,13 @@ export function isPreviewable(mimeType: string) {
   return PREVIEWABLE_TYPES.has(mimeType);
 }
 
+/** One message for a batch of failed uploads, or null when none failed. */
+export function describeUploadFailures(failures: string[]): string | null {
+  if (failures.length === 0) return null;
+  if (failures.length === 1) return failures[0];
+  return `${failures.length} files couldn't be uploaded. Try again.`;
+}
+
 /** "820 KB", "4.2 MB" */
 export function formatFileSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;

@@ -187,6 +187,7 @@ export type Database = {
           schedule_weekends: boolean
           schedule_window_end: string
           schedule_window_start: string
+          time_zone: string | null
           updated_at: string
           user_id: string
         }
@@ -196,6 +197,7 @@ export type Database = {
           schedule_weekends?: boolean
           schedule_window_end?: string
           schedule_window_start?: string
+          time_zone?: string | null
           updated_at?: string
           user_id: string
         }
@@ -205,6 +207,7 @@ export type Database = {
           schedule_weekends?: boolean
           schedule_window_end?: string
           schedule_window_start?: string
+          time_zone?: string | null
           updated_at?: string
           user_id?: string
         }

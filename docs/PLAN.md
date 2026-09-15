@@ -77,8 +77,10 @@ means all day. `time_zone` (IANA name, e.g. `America/New_York`) is picked during
 onboarding so Agito and Claude agree on times (decided 2026-09-15). It's a
 **dropdown, not a text field**: options come from the browser's built-in list
 (`Intl.supportedValuesOf("timeZone")`, no package), pre-selected to the
-detected zone. The server action checks the value against the same list, and
-the database trigger still rejects unknown names as a last line of defense.
+detected zone. The server action accepts any zone name the
+runtime's `Intl` recognizes (browsers and Node name some zones differently,
+e.g. `Asia/Kolkata` vs `Asia/Calcutta`) and saves the runtime's name; the
+database trigger still rejects unknown names as a last line of defense.
 
 ### `task_attachments`
 `id, task_id, user_id, storage_path, file_name, mime_type, size_bytes, created_at`
@@ -192,10 +194,45 @@ Don't mark phase 3 done until every item passes.
       task list; the home page no longer redirects
 - [ ] Revisiting `/onboarding` shows the saved values
 
-Optional without signing in: database-level checks that impersonate a user or
-an agent inside a rolled-back transaction (own-folder uploads allowed, other
-folders refused, blocked types and sizes rejected, agents can't create/edit
-tasks or upload).
+**Done without signing in (2026-09-15):** rolled-back database security tests
+impersonating two users, an agent, and anon — 136 checks passed, nothing
+persisted. Automated logic tests: `npm test` (dates, validation, file rules,
+settings).
+
+## Follow-ups from review and security tests (2026-09-15)
+
+Not yet fixed; pick before other users join.
+
+Database hardening — **applied 2026-09-15** as
+`20260915183858_security_hardening.sql`; re-tested with rolled-back database
+tests (111 checks passed, nothing persisted):
+- [x] `TRUNCATE` revoked from `anon`/`authenticated` on public tables.
+- [x] `.` and `..` segments rejected in `task_attachments.storage_path`.
+- [x] INSERT limited to the columns the app sends (tasks, lists, attachments).
+- [x] UPDATE revoked on `task_feed` and `task_attachments`.
+- [x] Time zones must exist in `pg_timezone_names` (`EST5EDT` is listed there,
+      so it's still accepted; it's a real tz database name).
+- Accepted, can't fix: `storage.objects` still allows `TRUNCATE` for
+  `anon`/`authenticated` — Supabase's storage role owns those grants.
+- [ ] Optional: revoke table-level INSERT on `user_settings` (RLS already
+      blocks it; no insert policy).
+- [ ] Check where `public.rls_auto_enable()` came from (not in our
+      migrations; callable by anon/authenticated per the advisors) and revoke
+      EXECUTE if it isn't needed.
+
+App — code written 2026-09-15 (type-check, lint, tests, build pass; needs
+browser testing):
+- [x] Edits, sheet uploads, and deletes queue behind task creation in
+      `task-board.tsx`.
+- [x] Pending deletes commit when the tab is hidden or closed (the undo window
+      ends when you leave the tab).
+- [x] Toasts stack (up to 3), so a new message doesn't remove an Undo.
+- [x] Signed file links refresh every 8 minutes while the sheet is open.
+- [x] Task delete cleanup pages through `storage.list`.
+- [x] HSTS header in production; `NEXT_PUBLIC_SITE_URL` required in production.
+- [ ] Decide whether "today" uses the browser zone or the saved time zone.
+- [ ] Undo after a delete restores the task's files as of the delete (files
+      uploaded during the undo window show after reload).
 
 ## Later
 

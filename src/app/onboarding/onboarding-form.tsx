@@ -22,6 +22,12 @@ export function OnboardingForm({ initial }: { initial: Initial }) {
   // null means "not chosen yet": fall back to the saved or detected zone.
   const [chosenZone, setChosenZone] = useState<string | null>(null);
   const timeZone = chosenZone ?? initial.time_zone ?? detected ?? "";
+  // The saved or detected zone may use a name missing from this browser's list
+  // (browsers name some zones differently), so always include it.
+  const zoneOptions =
+    options && timeZone && !options.some((option) => option.value === timeZone)
+      ? [{ value: timeZone, label: timeZone.replaceAll("_", " ") }, ...options]
+      : options;
 
   const [start, setStart] = useState(initial.schedule_window_start);
   const [end, setEnd] = useState(initial.schedule_window_end);
@@ -57,7 +63,7 @@ export function OnboardingForm({ initial }: { initial: Initial }) {
           Time zone
         </label>
         <p className="text-xs text-ink-muted">Used for due times and your scheduling window.</p>
-        {options ? (
+        {zoneOptions ? (
           <select
             id="time-zone"
             value={timeZone}
@@ -65,7 +71,7 @@ export function OnboardingForm({ initial }: { initial: Initial }) {
             className={field}
           >
             {!timeZone && <option value="">Pick your time zone</option>}
-            {options.map((option) => (
+            {zoneOptions.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
               </option>
@@ -175,7 +181,8 @@ export function OnboardingForm({ initial }: { initial: Initial }) {
 
       <button
         type="submit"
-        className="rounded-[10px] bg-accent px-4 py-3 font-medium text-white transition hover:bg-accent-hover active:scale-[0.98]"
+        disabled={pending || !zoneOptions || !timeZone}
+        className="rounded-[10px] bg-accent px-4 py-3 font-medium text-white transition hover:bg-accent-hover active:scale-[0.98] disabled:opacity-60"
       >
         {pending ? "Saving…" : "Save and continue"}
       </button>

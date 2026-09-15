@@ -26,6 +26,22 @@ export function supportedTimeZones(): string[] {
   return zones.includes("UTC") ? zones : [...zones, "UTC"];
 }
 
+const ZONE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_+-]*(\/[A-Za-z0-9_+-]+)*$/;
+
+/**
+ * The runtime's name for a real IANA time zone, or null. Browsers and Node can
+ * name the same zone differently (Asia/Kolkata vs Asia/Calcutta), so accept
+ * anything Intl recognizes instead of requiring an exact match with one list.
+ */
+export function canonicalTimeZone(zone: string): string | null {
+  if (!ZONE_NAME_PATTERN.test(zone)) return null;
+  try {
+    return new Intl.DateTimeFormat("en-US", { timeZone: zone }).resolvedOptions().timeZone;
+  } catch {
+    return null;
+  }
+}
+
 function fail(error: string): { ok: false; error: string } {
   return { ok: false, error };
 }
@@ -34,10 +50,9 @@ export function validateSettings(raw: unknown): ActionResult<SettingsInput> {
   if (typeof raw !== "object" || raw === null) return fail("Those settings aren't valid.");
   const input = raw as Record<string, unknown>;
 
-  const timeZone = input.time_zone;
-  if (typeof timeZone !== "string" || !supportedTimeZones().includes(timeZone)) {
-    return fail("Pick your time zone from the list.");
-  }
+  const timeZone =
+    typeof input.time_zone === "string" ? canonicalTimeZone(input.time_zone) : null;
+  if (!timeZone) return fail("Pick your time zone from the list.");
 
   const start = input.schedule_window_start;
   const end = input.schedule_window_end;

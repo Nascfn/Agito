@@ -2,8 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { deleteAttachment, getAttachmentUrls } from "@/app/actions/attachments";
-import { formatFileSize } from "@/lib/attachments/rules";
-import { uploadAttachment } from "@/lib/attachments/upload";
+import { describeUploadFailures, formatFileSize } from "@/lib/attachments/rules";
 import { draftFromTask, draftToInput, type TaskDraft } from "@/lib/tasks/draft";
 import { TITLE_MAX } from "@/lib/tasks/validate";
 import type { Attachment, Task, TaskInput } from "@/lib/types";
@@ -11,12 +10,18 @@ import { FileDrop } from "./file-drop";
 import { FileIcon, TrashIcon, XIcon } from "./icons";
 import { TaskFields } from "./task-fields";
 
+// Signed links last 10 minutes (see actions/attachments.ts); refresh before then.
+const URL_REFRESH_MS = 8 * 60 * 1000;
+
 type Props = {
   task: Task;
-  userId: string;
+  /** Files still uploading for this task. */
+  uploading: number;
   onClose: () => void;
   onSave: (id: string, input: TaskInput) => void;
   onDelete: (id: string) => void;
+  /** Uploads after the task's pending writes; resolves to error messages. */
+  onUploadFiles: (taskId: string, files: File[]) => Promise<string[]>;
   onAttachmentAdded: (taskId: string, attachment: Attachment) => void;
   onAttachmentRemoved: (taskId: string, attachmentId: string) => void;
 };
@@ -24,10 +29,11 @@ type Props = {
 /** View and edit a task. Uses the native <dialog> for focus and Escape handling. */
 export function TaskSheet({
   task,
-  userId,
+  uploading,
   onClose,
   onSave,
   onDelete,
+  onUploadFiles,
   onAttachmentAdded,
   onAttachmentRemoved,
 }: Props) {
@@ -38,7 +44,6 @@ export function TaskSheet({
   const [draft, setDraft] = useState<TaskDraft>(() => draftFromTask(task));
   const [error, setError] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(0);
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
 
@@ -52,16 +57,22 @@ export function TaskSheet({
     if (dialog && !dialog.open) dialog.showModal();
   }, []);
 
-  // Fetch short-lived links whenever the set of files changes. Links are
-  // prepared ahead of time so opening a file isn't blocked as a popup.
+  // Fetch short-lived links whenever the set of files changes, and refresh
+  // them before they expire. Links are prepared ahead of time so opening a
+  // file isn't blocked as a popup.
   useEffect(() => {
     if (!attachmentKey) return;
     let cancelled = false;
-    void getAttachmentUrls(task.id).then((result) => {
-      if (!cancelled && result.ok) setUrls(result.data);
-    });
+    const load = () => {
+      void getAttachmentUrls(task.id).then((result) => {
+        if (!cancelled && result.ok) setUrls(result.data);
+      });
+    };
+    load();
+    const interval = setInterval(load, URL_REFRESH_MS);
     return () => {
       cancelled = true;
+      clearInterval(interval);
     };
   }, [task.id, attachmentKey]);
 
@@ -87,15 +98,10 @@ export function TaskSheet({
 
   async function upload(files: File[]) {
     setFileError(null);
-    setUploading((count) => count + files.length);
-    await Promise.all(
-      files.map(async (file) => {
-        const result = await uploadAttachment(userId, task.id, file);
-        setUploading((count) => count - 1);
-        if (result.ok) onAttachmentAdded(task.id, result.data);
-        else setFileError(result.error);
-      }),
-    );
+    // The board queues uploads behind the task's create and adds finished
+    // files to the task, so the list below updates on its own.
+    const failures = await onUploadFiles(task.id, files);
+    setFileError(describeUploadFailures(failures));
   }
 
   async function remove(attachment: Attachment) {
