@@ -1,6 +1,7 @@
 "use server";
 
 import type { PostgrestError } from "@supabase/supabase-js";
+import { ATTACHMENTS_BUCKET } from "@/lib/attachments/rules";
 import { createClient } from "@/lib/supabase/server";
 import { TASK_COLUMNS } from "@/lib/tasks/columns";
 import { isUuid, validateTaskInput } from "@/lib/tasks/validate";
@@ -95,11 +96,32 @@ export async function setTaskStatus(
 export async function deleteTask(id: unknown): Promise<ActionResult<null>> {
   if (!isUuid(id)) return invalidTask;
 
-  const supabase = await signedInClient();
-  if (!supabase) return signedOut;
+  const supabase = await createClient();
+  const { data: auth } = await supabase.auth.getClaims();
+  const userId = auth?.claims?.sub;
+  if (typeof userId !== "string") return signedOut;
+
+  // Deleting the task cascades to its attachment rows, but stored files have
+  // to be removed separately. The board calls this after the undo window.
+  const { data: attachments } = await supabase
+    .from("task_attachments")
+    .select("storage_path")
+    .eq("task_id", id);
 
   const { error } = await supabase.from("tasks").delete().eq("id", id);
-
   if (error) return failure("delete task", error, "Couldn't delete the task. Try again.");
+
+  const storage = supabase.storage.from(ATTACHMENTS_BUCKET);
+  const paths = new Set((attachments ?? []).map((row) => row.storage_path as string));
+  // Also catch files whose upload finished but was never recorded.
+  const { data: folder } = await storage.list(`${userId}/${id}`);
+  for (const file of folder ?? []) paths.add(`${userId}/${id}/${file.name}`);
+
+  if (paths.size > 0) {
+    const { error: storageError } = await storage.remove([...paths]);
+    // The task is gone either way; log so orphaned files can be cleaned up.
+    if (storageError) console.error("Failed to remove task files:", storageError.message);
+  }
+
   return { ok: true, data: null };
 }

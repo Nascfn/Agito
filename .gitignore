@@ -40,6 +40,12 @@ yarn-error.log*
 # temporary session handoff notes (delete when done)
 PlanNextSession.md
 
+# local AI assistant context and tool config (kept out of the public repo)
+CLAUDE.md
+AGENTS.md
+.mcp.json
+.claude/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

@@ -64,3 +64,27 @@ export function TrashIcon(props: IconProps) {
     </Icon>
   );
 }
+
+export function PaperclipIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M21 11.5l-8.6 8.6a5 5 0 01-7.1-7.1l8.6-8.6a3.3 3.3 0 014.7 4.7l-8.6 8.6a1.7 1.7 0 01-2.4-2.4l7.9-7.9" />
+    </Icon>
+  );
+}
+
+export function FileIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8zM14 3v5h5" />
+    </Icon>
+  );
+}
+
+export function UploadIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M12 16V4M7 9l5-5 5 5M5 20h14" />
+    </Icon>
+  );
+}

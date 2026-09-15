@@ -1,25 +1,36 @@
 "use client";
 
 import { useRef, useState, type FormEvent } from "react";
+import { formatFileSize } from "@/lib/attachments/rules";
 import { draftToInput, emptyDraft, type TaskDraft } from "@/lib/tasks/draft";
 import { TITLE_MAX } from "@/lib/tasks/validate";
 import type { TaskInput } from "@/lib/types";
-import { ArrowUpIcon } from "./icons";
+import { FileDrop } from "./file-drop";
+import { ArrowUpIcon, FileIcon, XIcon } from "./icons";
 import { TaskFields } from "./task-fields";
 
 type Props = {
-  onAdd: (input: TaskInput) => void;
+  /** Files upload after the task is saved. */
+  onAdd: (input: TaskInput, files: File[]) => void;
 };
 
 /** Always-visible add bar. Title + Enter is enough; details are optional. */
 export function QuickAdd({ onAdd }: Props) {
   const [draft, setDraft] = useState<TaskDraft>(emptyDraft);
+  const [files, setFiles] = useState<File[]>([]);
   const [expanded, setExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const titleRef = useRef<HTMLInputElement>(null);
 
   function update(patch: Partial<TaskDraft>) {
     setDraft((current) => ({ ...current, ...patch }));
+    setError(null);
+  }
+
+  function reset() {
+    setDraft(emptyDraft);
+    setFiles([]);
+    setExpanded(false);
     setError(null);
   }
 
@@ -37,11 +48,14 @@ export function QuickAdd({ onAdd }: Props) {
       return;
     }
 
-    onAdd(result.data);
-    setDraft(emptyDraft);
-    setExpanded(false);
+    onAdd(result.data, files);
+    reset();
     titleRef.current?.focus();
   }
+
+  let detailsLabel = "Details";
+  if (expanded) detailsLabel = "Less";
+  else if (files.length > 0) detailsLabel = `Details · ${files.length}`;
 
   return (
     <form
@@ -70,7 +84,7 @@ export function QuickAdd({ onAdd }: Props) {
           aria-controls="quick-add-details"
           className="shrink-0 rounded-lg px-2.5 py-2 text-sm text-ink-muted transition-colors hover:bg-surface-hover hover:text-ink"
         >
-          {expanded ? "Less" : "Details"}
+          {detailsLabel}
         </button>
         <button
           type="submit"
@@ -84,6 +98,44 @@ export function QuickAdd({ onAdd }: Props) {
       {expanded && (
         <div id="quick-add-details" className="px-1 pb-1 pt-2">
           <TaskFields draft={draft} onChange={update} idPrefix="quick-add" tone="canvas" />
+
+          <div className="mt-3 flex flex-col gap-2">
+            {files.length > 0 && (
+              <ul className="flex flex-col gap-1">
+                {files.map((file, index) => (
+                  <li
+                    key={`${file.name}-${file.size}-${index}`}
+                    className="flex items-center gap-2 rounded-[10px] bg-canvas py-1.5 pl-3 pr-1.5"
+                  >
+                    <FileIcon className="size-4 shrink-0 text-accent-soft" />
+                    <span className="min-w-0 flex-1 truncate text-sm">{file.name}</span>
+                    <span className="shrink-0 text-xs text-ink-muted">
+                      {formatFileSize(file.size)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setFiles((current) => current.filter((_, i) => i !== index))}
+                      aria-label={`Remove ${file.name}`}
+                      className="rounded-md p-1.5 text-ink-muted transition-colors hover:bg-surface-hover hover:text-ink"
+                    >
+                      <XIcon className="size-4" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <FileDrop
+              tone="canvas"
+              onFiles={(picked) => {
+                setFiles((current) => [...current, ...picked]);
+                setError(null);
+              }}
+              onRejected={(messages) => {
+                if (messages.length > 0) setError(messages[0]);
+              }}
+            />
+          </div>
+
           {error && (
             <p role="alert" className="mt-2 text-sm text-due">
               {error}
@@ -92,11 +144,7 @@ export function QuickAdd({ onAdd }: Props) {
           <div className="mt-3 flex gap-2">
             <button
               type="button"
-              onClick={() => {
-                setDraft(emptyDraft);
-                setExpanded(false);
-                setError(null);
-              }}
+              onClick={reset}
               className="flex-1 rounded-[10px] border border-line-strong py-2.5 text-sm text-ink-soft transition-colors hover:bg-surface-hover"
             >
               Cancel
